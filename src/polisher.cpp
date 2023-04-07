@@ -4,546 +4,323 @@
  * @brief Polisher class source file
  */
 
-#include <algorithm>
-#include <unordered_set>
-#include <iostream>
+#include "polisher.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <memory>
+#include <numeric>
+#include <stdexcept>
+#include <string_view>
+
+#include "biosoup/timer.hpp"
+#include "fmt/core.h"
 #include "overlap.hpp"
 #include "sequence.hpp"
-#include "window.hpp"
-#include "logger.hpp"
-#include "polisher.hpp"
-#ifdef CUDA_ENABLED
-#include "cuda/cudapolisher.hpp"
-#endif
-
-#include "bioparser/fasta_parser.hpp"
-#include "bioparser/fastq_parser.hpp"
-#include "bioparser/mhap_parser.hpp"
-#include "bioparser/paf_parser.hpp"
-#include "bioparser/sam_parser.hpp"
-#include "thread_pool/thread_pool.hpp"
 #include "spoa/spoa.hpp"
+#include "tbb/enumerable_thread_specific.h"
+#include "tbb/parallel_for.h"
+#include "window.hpp"
 
 namespace racon {
 
-constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
+auto BindSegmentsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
+                           std::span<Window> windows, const Overlap& ovlp) {
+  const auto cigar = ovlp.cigar();
+  const auto q_id = ovlp.q_id();
 
-template<class T>
-void shrinkToFit(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
+  const auto q_len = ovlp.q_length();
 
-    uint64_t i = begin;
-    for (uint64_t j = begin; i < src.size(); ++i) {
-        if (src[i] != nullptr) {
-            continue;
+  bool found_first_match = false;
+  int32_t q_curr =
+      (ovlp.strand() ? (ovlp.q_length() - ovlp.q_end()) : ovlp.q_begin()) - 1;
+  auto q_first = q_curr + 1;
+
+  int32_t t_curr = ovlp.t_begin() - 1;
+  auto t_first = t_curr;
+
+  auto q_last = q_first, t_last = t_first;
+  auto window_idx = static_cast<std::size_t>(std::distance(
+      windows.begin(),
+      std::upper_bound(windows.begin(), windows.end(),
+                       static_cast<uint32_t>(t_curr + 1),
+                       [](uint32_t val, const Window& win) -> bool {
+                         return val < win.last();
+                       })));
+
+  auto add_interval = [&]() {
+    const auto len = q_last - q_first;
+
+    const auto data = !ovlp.strand()
+                          ? sequences[q_id]->data().substr(q_first, len)
+                          : sequences[q_id]->reverse_complement().substr(
+                                q_len - q_last + 1, len);
+
+    const auto quality = !ovlp.strand()
+                             ? sequences[q_id]->quality().substr(q_first, len)
+                             : sequences[q_id]->reverse_quality().substr(
+                                   q_len - q_last + 1, len);
+
+    windows[window_idx].AddLayer(data, quality, t_first, t_last);
+  };
+
+  for (uint32_t i = 0, j = 0; window_idx < windows.size() && i < cigar.size();
+       ++i) {
+    if (cigar[i] == 'M' || cigar[i] == '=' || cigar[i] == 'X') {
+      uint32_t k = 0, num_bases = atoi(&cigar[j]);
+      j = i + 1;
+      while (k < num_bases && window_idx < windows.size()) {
+        ++q_curr;
+        ++t_curr;
+
+        if (!found_first_match) {
+          found_first_match = true;
+          q_first = q_curr;
+          t_first = t_curr;
         }
-
-        j = std::max(j, i);
-        while (j < src.size() && src[j] == nullptr) {
-            ++j;
-        }
-
-        if (j >= src.size()) {
-            break;
-        } else if (i != j) {
-            src[i].swap(src[j]);
-        }
-    }
-    if (i < src.size()) {
-        src.resize(i);
-    }
-}
-
-std::unique_ptr<Polisher> createPolisher(const std::string& sequences_path,
-    const std::string& overlaps_path, const std::string& target_path,
-    PolisherType type, uint32_t window_length, double quality_threshold,
-    double error_threshold, bool trim, int8_t match, int8_t mismatch, int8_t gap,
-    uint32_t num_threads, uint32_t cudapoa_batches, bool cuda_banded_alignment,
-    uint32_t cudaaligner_batches, uint32_t cudaaligner_band_width) {
-
-    if (type != PolisherType::kC && type != PolisherType::kF) {
-        fprintf(stderr, "[racon::createPolisher] error: invalid polisher type!\n");
-        exit(1);
-    }
-
-    if (window_length == 0) {
-        fprintf(stderr, "[racon::createPolisher] error: invalid window length!\n");
-        exit(1);
-    }
-
-    std::unique_ptr<bioparser::Parser<Sequence>> sparser = nullptr,
-        tparser = nullptr;
-    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
-
-    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
-        if (src.size() < suffix.size()) {
-            return false;
-        }
-        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-
-    if (is_suffix(sequences_path, ".fasta") || is_suffix(sequences_path, ".fasta.gz") ||
-        is_suffix(sequences_path, ".fna") || is_suffix(sequences_path, ".fna.gz") ||
-        is_suffix(sequences_path, ".fa") || is_suffix(sequences_path, ".fa.gz")) {
-        sparser = bioparser::Parser<Sequence>::Create<bioparser::FastaParser>(
-            sequences_path);
-    } else if (is_suffix(sequences_path, ".fastq") || is_suffix(sequences_path, ".fastq.gz") ||
-        is_suffix(sequences_path, ".fq") || is_suffix(sequences_path, ".fq.gz")) {
-        sparser = bioparser::Parser<Sequence>::Create<bioparser::FastqParser>(
-            sequences_path);
-    } else {
-        fprintf(stderr, "[racon::createPolisher] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".fasta, .fasta.gz, .fna, .fna.gz, .fa, .fa.gz, .fastq, .fastq.gz, "
-            ".fq, .fq.gz)!\n",
-            sequences_path.c_str());
-        exit(1);
-    }
-
-    if (is_suffix(overlaps_path, ".mhap") || is_suffix(overlaps_path, ".mhap.gz")) {
-        oparser = bioparser::Parser<Overlap>::Create<bioparser::MhapParser>(
-            overlaps_path);
-    } else if (is_suffix(overlaps_path, ".paf") || is_suffix(overlaps_path, ".paf.gz")) {
-        oparser = bioparser::Parser<Overlap>::Create<bioparser::PafParser>(
-            overlaps_path);
-    } else if (is_suffix(overlaps_path, ".sam") || is_suffix(overlaps_path, ".sam.gz")) {
-        oparser = bioparser::Parser<Overlap>::Create<bioparser::SamParser>(
-            overlaps_path);
-    } else {
-        fprintf(stderr, "[racon::createPolisher] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".mhap, .mhap.gz, .paf, .paf.gz, .sam, .sam.gz)!\n", overlaps_path.c_str());
-        exit(1);
-    }
-
-    if (is_suffix(target_path, ".fasta") || is_suffix(target_path, ".fasta.gz") ||
-        is_suffix(target_path, ".fna") || is_suffix(target_path, ".fna.gz") ||
-        is_suffix(target_path, ".fa") || is_suffix(target_path, ".fa.gz")) {
-        tparser = bioparser::Parser<Sequence>::Create<bioparser::FastaParser>(
-            target_path);
-    } else if (is_suffix(target_path, ".fastq") || is_suffix(target_path, ".fastq.gz") ||
-        is_suffix(target_path, ".fq") || is_suffix(target_path, ".fq.gz")) {
-        tparser = bioparser::Parser<Sequence>::Create<bioparser::FastqParser>(
-            target_path);
-    } else {
-        fprintf(stderr, "[racon::createPolisher] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".fasta, .fasta.gz, .fna, .fna.gz, .fa, .fa.gz, .fastq, .fastq.gz, "
-            ".fq, .fq.gz)!\n",
-            target_path.c_str());
-        exit(1);
-    }
-
-    if (cudapoa_batches > 0 || cudaaligner_batches > 0)
-    {
-#ifdef CUDA_ENABLED
-        // If CUDA is enabled, return an instance of the CUDAPolisher object.
-        return std::unique_ptr<Polisher>(new CUDAPolisher(std::move(sparser),
-                    std::move(oparser), std::move(tparser), type, window_length,
-                    quality_threshold, error_threshold, trim, match, mismatch, gap,
-                    num_threads, cudapoa_batches, cuda_banded_alignment, cudaaligner_batches,
-                    cudaaligner_band_width));
-#else
-        fprintf(stderr, "[racon::createPolisher] error: "
-                "Attemping to use CUDA when CUDA support is not available.\n"
-                "Please check logic in %s:%s\n",
-                __FILE__, __func__);
-        exit(1);
-#endif
-    }
-    else
-    {
-        (void) cuda_banded_alignment;
-        (void) cudaaligner_band_width;
-        return std::unique_ptr<Polisher>(new Polisher(std::move(sparser),
-                    std::move(oparser), std::move(tparser), type, window_length,
-                    quality_threshold, error_threshold, trim, match, mismatch, gap,
-                    num_threads));
-    }
-}
-
-Polisher::Polisher(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
-    std::unique_ptr<bioparser::Parser<Overlap>> oparser,
-    std::unique_ptr<bioparser::Parser<Sequence>> tparser,
-    PolisherType type, uint32_t window_length, double quality_threshold,
-    double error_threshold, bool trim, int8_t match, int8_t mismatch, int8_t gap,
-    uint32_t num_threads)
-        : sparser_(std::move(sparser)), oparser_(std::move(oparser)),
-        tparser_(std::move(tparser)), type_(type), quality_threshold_(
-        quality_threshold), error_threshold_(error_threshold), trim_(trim),
-        alignment_engines_(), sequences_(), dummy_quality_(window_length, '!'),
-        window_length_(window_length), windows_(),
-        thread_pool_(std::make_shared<thread_pool::ThreadPool>(num_threads)),
-        logger_(new Logger()) {
-
-    for (uint32_t i = 0; i < num_threads; ++i) {
-        alignment_engines_.emplace_back(spoa::AlignmentEngine::Create(
-            spoa::AlignmentType::kNW, match, mismatch, gap));
-        alignment_engines_.back()->Prealloc(window_length_, 5);
-    }
-}
-
-Polisher::~Polisher() {
-    logger_->total("[racon::Polisher::] total =");
-}
-
-void Polisher::initialize() {
-
-    if (!windows_.empty()) {
-        fprintf(stderr, "[racon::Polisher::initialize] warning: "
-            "object already initialized!\n");
-        return;
-    }
-
-    logger_->log();
-
-    tparser_->Reset();
-    sequences_ = tparser_->Parse(-1);
-
-    uint64_t targets_size = sequences_.size();
-    if (targets_size == 0) {
-        fprintf(stderr, "[racon::Polisher::initialize] error: "
-            "empty target sequences set!\n");
-        exit(1);
-    }
-
-    std::unordered_map<std::string, uint64_t> name_to_id;
-    std::unordered_map<uint64_t, uint64_t> id_to_id;
-    for (uint64_t i = 0; i < targets_size; ++i) {
-        name_to_id[sequences_[i]->name() + "t"] = i;
-        id_to_id[i << 1 | 1] = i;
-    }
-
-    std::vector<bool> has_name(targets_size, true);
-    std::vector<bool> has_data(targets_size, true);
-    std::vector<bool> has_reverse_data(targets_size, false);
-
-    logger_->log("[racon::Polisher::initialize] loaded target sequences");
-    logger_->log();
-
-    uint64_t sequences_size = 0, total_sequences_length = 0;
-
-    sparser_->Reset();
-    while (true) {
-        uint64_t l = sequences_.size();
-        auto reads = sparser_->Parse(kChunkSize);
-        if (reads.empty()) {
-          break;
-        }
-        sequences_.insert(
-            sequences_.end(),
-            std::make_move_iterator(reads.begin()),
-            std::make_move_iterator(reads.end()));
-
-        uint64_t n = 0;
-        for (uint64_t i = l; i < sequences_.size(); ++i, ++sequences_size) {
-            total_sequences_length += sequences_[i]->data().size();
-
-            auto it = name_to_id.find(sequences_[i]->name() + "t");
-            if (it != name_to_id.end()) {
-                if (sequences_[i]->data().size() != sequences_[it->second]->data().size() ||
-                    sequences_[i]->quality().size() != sequences_[it->second]->quality().size()) {
-
-                    fprintf(stderr, "[racon::Polisher::initialize] error: "
-                        "duplicate sequence %s with unequal data\n",
-                        sequences_[i]->name().c_str());
-                    exit(1);
-                }
-
-                name_to_id[sequences_[i]->name() + "q"] = it->second;
-                id_to_id[sequences_size << 1 | 0] = it->second;
-
-                sequences_[i].reset();
-                ++n;
-            } else {
-                name_to_id[sequences_[i]->name() + "q"] = i - n;
-                id_to_id[sequences_size << 1 | 0] = i - n;
-            }
-        }
-
-        shrinkToFit(sequences_, l);
-    }
-
-    if (sequences_size == 0) {
-        fprintf(stderr, "[racon::Polisher::initialize] error: "
-            "empty sequences set!\n");
-        exit(1);
-    }
-
-    has_name.resize(sequences_.size(), false);
-    has_data.resize(sequences_.size(), false);
-    has_reverse_data.resize(sequences_.size(), false);
-
-    WindowType window_type = static_cast<double>(total_sequences_length) /
-        sequences_size <= 1000 ? WindowType::kNGS : WindowType::kTGS;
-
-    logger_->log("[racon::Polisher::initialize] loaded sequences");
-    logger_->log();
-
-    std::vector<std::unique_ptr<Overlap>> overlaps;
-
-    auto remove_invalid_overlaps = [&](uint64_t begin, uint64_t end) -> void {
-        for (uint64_t i = begin; i < end; ++i) {
-            if (overlaps[i] == nullptr) {
-                continue;
-            }
-            if (overlaps[i]->error() > error_threshold_ ||
-                overlaps[i]->q_id() == overlaps[i]->t_id()) {
-                overlaps[i].reset();
-                continue;
-            }
-            if (type_ == PolisherType::kC) {
-                for (uint64_t j = i + 1; j < end; ++j) {
-                    if (overlaps[j] == nullptr) {
-                        continue;
-                    }
-                    if (overlaps[i]->length() >= overlaps[j]->length()) {
-                        overlaps[j].reset();
-                    } else {
-                        overlaps[i].reset();
-                        break;
-                    }
-                }
-            }
-        }
-    };
-
-    oparser_->Reset();
-    uint64_t c = 0;
-    while (true) {
-        auto overlaps_chunk = oparser_->Parse(kChunkSize);
-        if (overlaps_chunk.empty()) {
-          break;
-        }
-        overlaps.insert(
-            overlaps.end(),
-            std::make_move_iterator(overlaps_chunk.begin()),
-            std::make_move_iterator(overlaps_chunk.end()));
-
-        uint64_t l = c;
-        for (uint64_t i = l; i < overlaps.size(); ++i) {
-            overlaps[i]->transmute(sequences_, name_to_id, id_to_id);
-
-            if (!overlaps[i]->is_valid()) {
-                overlaps[i].reset();
-                continue;
-            }
-
-            while (overlaps[c] == nullptr) {
-                ++c;
-            }
-            if (overlaps[c]->q_id() != overlaps[i]->q_id()) {
-                remove_invalid_overlaps(c, i);
-                c = i;
-            }
-        }
-
-        uint64_t n = 0;
-        for (uint64_t i = l; i < c; ++i) {
-          if (overlaps[i] == nullptr) {
-            ++n;
+        q_last = q_curr;
+        t_last = t_curr;
+        if (t_last == static_cast<int32_t>(windows[window_idx].last()) - 1) {
+          if (found_first_match) {
+            add_interval();
           }
-        }
-        c -= n;
-        shrinkToFit(overlaps, l);
-    }
-    remove_invalid_overlaps(c, overlaps.size());
-    shrinkToFit(overlaps, c);
-
-    for (const auto& it : overlaps) {
-        if (it->strand()) {
-            has_reverse_data[it->q_id()] = true;
-        } else {
-            has_data[it->q_id()] = true;
-        }
-    }
-
-    std::unordered_map<std::string, uint64_t>().swap(name_to_id);
-    std::unordered_map<uint64_t, uint64_t>().swap(id_to_id);
-
-    if (overlaps.empty()) {
-        fprintf(stderr, "[racon::Polisher::initialize] error: "
-            "empty overlap set!\n");
-        exit(1);
-    }
-
-    logger_->log("[racon::Polisher::initialize] loaded overlaps");
-    logger_->log();
-
-    std::vector<std::future<void>> thread_futures;
-    for (uint64_t i = 0; i < sequences_.size(); ++i) {
-        thread_futures.emplace_back(thread_pool_->Submit(
-            [&](uint64_t j) -> void {
-                sequences_[j]->transmute(has_name[j], has_data[j], has_reverse_data[j]);
-            }, i));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-
-    find_overlap_breaking_points(overlaps);
-
-    logger_->log();
-
-    std::vector<uint64_t> id_to_first_window_id(targets_size + 1, 0);
-    for (uint64_t i = 0; i < targets_size; ++i) {
-        uint32_t k = 0;
-        for (uint32_t j = 0; j < sequences_[i]->data().size(); j += window_length_, ++k) {
-
-            uint32_t length = std::min(j + window_length_,
-                static_cast<uint32_t>(sequences_[i]->data().size())) - j;
-
-            windows_.emplace_back(createWindow(i, k, window_type,
-                &(sequences_[i]->data()[j]), length,
-                sequences_[i]->quality().empty() ? &(dummy_quality_[0]) :
-                &(sequences_[i]->quality()[j]), length));
+          found_first_match = false;
+          ++window_idx;
         }
 
-        id_to_first_window_id[i + 1] = id_to_first_window_id[i] + k;
-    }
-
-    targets_coverages_.resize(targets_size, 0);
-
-    for (uint64_t i = 0; i < overlaps.size(); ++i) {
-
-        ++targets_coverages_[overlaps[i]->t_id()];
-
-        const auto& sequence = sequences_[overlaps[i]->q_id()];
-        const auto& breaking_points = overlaps[i]->breaking_points();
-
-        for (uint32_t j = 0; j < breaking_points.size(); j += 2) {
-            if (breaking_points[j + 1].second - breaking_points[j].second < 0.02 * window_length_) {
-                continue;
-            }
-
-            if (!sequence->quality().empty() ||
-                !sequence->reverse_quality().empty()) {
-
-                const auto& quality = overlaps[i]->strand() ?
-                    sequence->reverse_quality() : sequence->quality();
-                double average_quality = 0;
-                for (uint32_t k = breaking_points[j].second; k < breaking_points[j + 1].second; ++k) {
-                    average_quality += static_cast<uint32_t>(quality[k]) - 33;
-                }
-                average_quality /= breaking_points[j + 1].second - breaking_points[j].second;
-
-                if (average_quality < quality_threshold_) {
-                    continue;
-                }
-            }
-
-            uint64_t window_id = id_to_first_window_id[overlaps[i]->t_id()] +
-                breaking_points[j].first / window_length_;
-            uint32_t window_start = (breaking_points[j].first / window_length_) *
-                window_length_;
-
-            const char* data = overlaps[i]->strand() ?
-                &(sequence->reverse_complement()[breaking_points[j].second]) :
-                &(sequence->data()[breaking_points[j].second]);
-            uint32_t data_length = breaking_points[j + 1].second -
-                breaking_points[j].second;
-
-            const char* quality = overlaps[i]->strand() ?
-                (sequence->reverse_quality().empty() ?
-                    nullptr : &(sequence->reverse_quality()[breaking_points[j].second]))
-                :
-                (sequence->quality().empty() ?
-                    nullptr : &(sequence->quality()[breaking_points[j].second]));
-            uint32_t quality_length = quality == nullptr ? 0 : data_length;
-
-            windows_[window_id]->add_layer(data, data_length,
-                quality, quality_length,
-                breaking_points[j].first - window_start,
-                breaking_points[j + 1].first - window_start - 1);
+        ++k;
+      }
+    } else if (cigar[i] == 'I') {
+      q_curr += atoi(&cigar[j]);
+      j = i + 1;
+    } else if (cigar[i] == 'D' || cigar[i] == 'N') {
+      uint32_t k = 0, num_bases = atoi(&cigar[j]);
+      j = i + 1;
+      while (k < num_bases && window_idx < windows.size()) {
+        ++t_curr;
+        if (t_curr == static_cast<int32_t>(windows[window_idx].last()) - 1) {
+          if (found_first_match) {
+            add_interval();
+          }
+          found_first_match = false;
+          ++window_idx;
         }
-
-        overlaps[i].reset();
+        ++k;
+      }
+    } else if (cigar[i] == 'S' || cigar[i] == 'H' || cigar[i] == 'P') {
+      j = i + 1;
     }
-
-    logger_->log("[racon::Polisher::initialize] transformed data into windows");
+  }
 }
 
-void Polisher::find_overlap_breaking_points(std::vector<std::unique_ptr<Overlap>>& overlaps)
-{
-    std::vector<std::future<void>> thread_futures;
-    for (uint64_t i = 0; i < overlaps.size(); ++i) {
-        thread_futures.emplace_back(thread_pool_->Submit(
-            [&](uint64_t j) -> void {
-                overlaps[j]->find_breaking_points(sequences_, window_length_);
-            }, i));
+struct Polisher::Impl {
+  Impl() = delete;
+
+  Impl(const Impl&) = delete;
+  Impl& operator=(const Impl&) = delete;
+
+  Impl(Impl&&) = delete;
+  Impl& operator=(Impl&&) = delete;
+
+  Impl(Dataset dataset, PolisherConfig config)
+      : dataset(std::move(dataset)), config(config) {}
+
+  std::vector<std::unique_ptr<Sequence>> Polish() {
+    auto dst = std::vector<std::unique_ptr<Sequence>>();
+    dst.reserve(dataset.targets().size());
+
+    auto function_timer = biosoup::Timer();
+
+    function_timer.Start();
+    const auto n_targets = dataset.targets().size();
+
+    auto n_aligned = std::atomic_size_t(0);
+    auto n_polished = std::atomic_size_t(0);
+
+    auto report_ticket = std::atomic_size_t(0);
+    auto report_state = [&function_timer, n_targets, &n_aligned, &n_polished,
+                         &report_ticket]() -> void {
+      auto const to_percent = [n_targets](double val) -> double {
+        return 100. * (val / n_targets);
+      };
+
+      if (auto ticket = ++report_ticket; ticket == report_ticket) {
+        fmt::print(
+            stderr,
+            "\r[camel::ErrorCorrect]({:12.3f}) aligned {:3.3f}% | polished "
+            "{:3.3f}%",
+            function_timer.Lap(), to_percent(n_aligned),
+            to_percent(n_polished));
+      }
+    };
+
+    function_timer.Start();
+    tbb::parallel_for(
+        size_t(0), dataset.targets().size(), [&](size_t target_idx) -> void {
+          const auto& target_seq = dataset.targets()[target_idx];
+          const auto target_data = target_seq->data();
+          const auto target_qual = target_seq->quality();
+
+          const auto target_overlaps = dataset.overlaps(target_idx);
+          tbb::parallel_for(size_t(0), target_overlaps.size(),
+                            [&](size_t ovlp_idx) -> void {
+                              dataset.overlaps(target_idx)[ovlp_idx]->cigar(
+                                  dataset.sequences());
+                            });
+          ++n_aligned;
+          report_state();
+
+          std::vector<Window> windows;
+          windows.reserve(target_data.length() / config.window_length + 1);
+          for (size_t pos = 0; pos < target_data.length();) {
+            const auto nxt =
+                std::min(pos + config.window_length, target_data.length());
+
+            const auto data = target_data.substr(pos, config.window_length);
+            const auto qual =
+                target_qual.empty()
+                    ? std::string_view()
+                    : target_qual.substr(pos, config.window_length);
+
+            windows.emplace_back(pos, nxt, data, qual);
+            pos = nxt;
+          }
+
+          for (const auto& ovlp_ptr : target_overlaps) {
+            BindSegmentsToWindows(dataset.sequences(), windows, *ovlp_ptr);
+          }
+
+          std::atomic<size_t> polish_cnt;
+          std::vector<std::string> window_consensues(windows.size());
+          tbb::parallel_for(
+              size_t(0), windows.size(), [&](size_t window_idx) -> void {
+                auto consensus_flag = windows[window_idx].GenerateConsensus(
+                    GetAlignmentEngine(config.poa_cfg), config.trim);
+                polish_cnt += consensus_flag.second;
+                window_consensues[window_idx] = std::move(consensus_flag.first);
+              });
+
+          const auto seq_len = std::transform_reduce(
+              window_consensues.cbegin(), window_consensues.cend(), size_t(0),
+              std::plus<size_t>(), std::mem_fn(&std::string::size));
+
+          std::string consensus_seq;
+          consensus_seq.reserve(seq_len);
+          for (const auto& it : window_consensues) {
+            consensus_seq += it;
+          }
+
+          std::string tags;
+          tags += " LN:i:" + std::to_string(seq_len);
+          tags += " RC:i:" + std::to_string(target_overlaps.size());
+          tags += " XC:f:" + std::to_string(static_cast<double>(polish_cnt) /
+                                            windows.size());
+
+          dst.push_back(CreateSequence(std::string(target_seq->name()) + tags,
+                                       consensus_seq));
+
+          ++n_polished;
+          report_state();
+        });
+
+    return dst;
+  }
+
+  spoa::AlignmentEngine& GetAlignmentEngine(POAConfig const config) {
+    auto& engine = alignment_engines.local();
+    if (!engine) {
+      engine = spoa::AlignmentEngine::Create(
+          spoa::AlignmentType::kNW, config.match, config.mismatch, config.gap);
     }
 
-    uint32_t logger_step = thread_futures.size() / 20;
-    for (uint64_t i = 0; i < thread_futures.size(); ++i) {
-        thread_futures[i].wait();
-        if (logger_step != 0 && (i + 1) % logger_step == 0 && (i + 1) / logger_step < 20) {
-            logger_->bar("[racon::Polisher::initialize] aligning overlaps");
-        }
-    }
-    if (logger_step != 0) {
-        logger_->bar("[racon::Polisher::initialize] aligning overlaps");
-    } else {
-        logger_->log("[racon::Polisher::initialize] aligned overlaps");
-    }
+    return *engine;
+  }
+
+  Dataset dataset;
+  PolisherConfig config;
+
+  tbb::enumerable_thread_specific<std::unique_ptr<spoa::AlignmentEngine>>
+      alignment_engines;
+};
+
+Polisher::Polisher(Polisher&& that) noexcept : pimpl_(std::move(that.pimpl_)) {}
+
+Polisher& Polisher::operator=(Polisher&& that) noexcept {
+  pimpl_ = std::move(that.pimpl_);
+  return *this;
 }
 
-void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
-    bool drop_unpolished_sequences) {
+Polisher::~Polisher() {}
 
-    logger_->log();
+Polisher::Polisher(Dataset dataset, PolisherConfig config)
+    : pimpl_(std::make_unique<Impl>(std::move(dataset), config)) {}
 
-    std::vector<std::future<bool>> thread_futures;
-    for (uint64_t i = 0; i < windows_.size(); ++i) {
-        thread_futures.emplace_back(thread_pool_->Submit(
-            [&](uint64_t j) -> bool {
-                auto it = thread_pool_->thread_map().find(std::this_thread::get_id());  // NOLINT
-                return windows_[j]->generate_consensus(
-                    alignment_engines_[it->second], trim_);
-            }, i));
-    }
-
-    std::string polished_data = "";
-    uint32_t num_polished_windows = 0;
-
-    uint64_t logger_step = thread_futures.size() / 20;
-
-    for (uint64_t i = 0; i < thread_futures.size(); ++i) {
-        thread_futures[i].wait();
-
-        num_polished_windows += thread_futures[i].get() == true ? 1 : 0;
-        polished_data += windows_[i]->consensus();
-
-        if (i == windows_.size() - 1 || windows_[i + 1]->rank() == 0) {
-            double polished_ratio = num_polished_windows /
-                static_cast<double>(windows_[i]->rank() + 1);
-
-            if (!drop_unpolished_sequences || polished_ratio > 0) {
-                std::string tags = type_ == PolisherType::kF ? "r" : "";
-                tags += " LN:i:" + std::to_string(polished_data.size());
-                tags += " RC:i:" + std::to_string(targets_coverages_[windows_[i]->id()]);
-                tags += " XC:f:" + std::to_string(polished_ratio);
-                dst.emplace_back(createSequence(sequences_[windows_[i]->id()]->name() +
-                    tags, polished_data));
-            }
-
-            num_polished_windows = 0;
-            polished_data.clear();
-        }
-        windows_[i].reset();
-
-        if (logger_step != 0 && (i + 1) % logger_step == 0 && (i + 1) / logger_step < 20) {
-            logger_->bar("[racon::Polisher::polish] generating consensus");
-        }
-    }
-
-    if (logger_step != 0) {
-        logger_->bar("[racon::Polisher::polish] generating consensus");
-    } else {
-        logger_->log("[racon::Polisher::polish] generated consensus");
-    }
-
-    std::vector<std::shared_ptr<Window>>().swap(windows_);
-    std::vector<std::unique_ptr<Sequence>>().swap(sequences_);
+std::vector<std::unique_ptr<Sequence>> Polisher::Polish() {
+  return pimpl_->Polish();
 }
 
-}
+// void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
+//                       bool drop_unpolished_sequences) {
+//   logger_->log();
+//
+//   std::vector<std::future<bool>> thread_futures;
+//   for (uint64_t i = 0; i < windows_.size(); ++i) {
+//     thread_futures.emplace_back(thread_pool_->Submit(
+//         [&](uint64_t j) -> bool {
+//           auto it = thread_pool_->thread_map().find(
+//               std::this_thread::get_id());  // NOLINT
+//           return
+//           windows_[j]->generate_consensus(alignment_engines_[it->second],
+//                                                  trim_);
+//         },
+//         i));
+//   }
+//
+//   std::string polished_data = "";
+//   uint32_t num_polished_windows = 0;
+//
+//   uint64_t logger_step = thread_futures.size() / 20;
+//
+//   for (uint64_t i = 0; i < thread_futures.size(); ++i) {
+//     thread_futures[i].wait();
+//
+//     num_polished_windows += thread_futures[i].get() == true ? 1 : 0;
+//     polished_data += windows_[i]->consensus();
+//
+//     if (i == windows_.size() - 1 || windows_[i + 1]->rank() == 0) {
+//       double polished_ratio =
+//           num_polished_windows / static_cast<double>(windows_[i]->rank() +
+//           1);
+//
+//       if (!drop_unpolished_sequences || polished_ratio > 0) {
+//         std::string tags = type_ == PolisherType::kF ? "r" : "";
+//         tags += " LN:i:" + std::to_string(polished_data.size());
+//         tags +=
+//             " RC:i:" + std::to_string(targets_coverages_[windows_[i]->id()]);
+//         tags += " XC:f:" + std::to_string(polished_ratio);
+//         dst.emplace_back(createSequence(
+//             sequences_[windows_[i]->id()]->name() + tags, polished_data));
+//       }
+//
+//       num_polished_windows = 0;
+//       polished_data.clear();
+//     }
+//     windows_[i].reset();
+//
+//     if (logger_step != 0 && (i + 1) % logger_step == 0 &&
+//         (i + 1) / logger_step < 20) {
+//       logger_->bar("[racon::Polisher::polish] generating consensus");
+//     }
+//   }
+//
+//   if (logger_step != 0) {
+//     logger_->bar("[racon::Polisher::polish] generating consensus");
+//   } else {
+//     logger_->log("[racon::Polisher::polish] generated consensus");
+//   }
+//
+//   std::vector<std::shared_ptr<Window>>().swap(windows_);
+//   std::vector<std::unique_ptr<Sequence>>().swap(sequences_);
+// }
+
+}  // namespace racon

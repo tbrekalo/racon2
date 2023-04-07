@@ -1,76 +1,43 @@
-/*!
- * @file window.hpp
- *
- * @brief Window class header file
- */
-
 #pragma once
 
-#include <stdlib.h>
-#include <vector>
 #include <memory>
-#include <string>
-#include <utility>
+#include <string_view>
 
 namespace spoa {
-    class AlignmentEngine;
+class AlignmentEngine;
 }
 
 namespace racon {
 
-enum class WindowType {
-    kNGS, // Next Generation Sequencing
-    kTGS // Third Generation Sequencing
-};
-
-class Window;
-std::shared_ptr<Window> createWindow(uint64_t id, uint32_t rank, WindowType type,
-    const char* backbone, uint32_t backbone_length, const char* quality,
-    uint32_t quality_length);
-
 class Window {
+ public:
+  Window(uint32_t first, uint32_t last, std::string_view backbone,
+         std::string_view quality);
 
-public:
-    ~Window();
+  ~Window();
 
-    uint64_t id() const {
-        return id_;
-    }
-    uint32_t rank() const {
-        return rank_;
-    }
+  Window(Window&&) noexcept;
+  Window& operator=(Window&&) noexcept;
+  
+  /*
+   *  @brief second params is true if polish is success,
+   *  false in case the coverage was to low
+   * */
+  std::pair<std::string, bool> GenerateConsensus(
+      spoa::AlignmentEngine& alignment_engine, bool trim);
 
-    const std::string& consensus() const {
-        return consensus_;
-    }
+  void AddLayer(std::string_view sequence, std::string_view quality,
+                uint32_t first, uint32_t last);
 
-    bool generate_consensus(std::shared_ptr<spoa::AlignmentEngine> alignment_engine,
-        bool trim);
+  std::uint32_t first() const { return first_; }
+  std::uint32_t last() const { return last_; }
 
-    void add_layer(const char* sequence, uint32_t sequence_length,
-        const char* quality, uint32_t quality_length, uint32_t begin,
-        uint32_t end);
+ private:
+  struct Impl;
 
-    friend std::shared_ptr<Window> createWindow(uint64_t id, uint32_t rank,
-        WindowType type, const char* backbone, uint32_t backbone_length,
-        const char* quality, uint32_t quality_length);
-
-#ifdef CUDA_ENABLED
-    friend class CUDABatchProcessor;
-#endif
-private:
-    Window(uint64_t id, uint32_t rank, WindowType type, const char* backbone,
-        uint32_t backbone_length, const char* quality, uint32_t quality_length);
-    Window(const Window&) = delete;
-    const Window& operator=(const Window&) = delete;
-
-    uint64_t id_;
-    uint32_t rank_;
-    WindowType type_;
-    std::string consensus_;
-    std::vector<std::pair<const char*, uint32_t>> sequences_;
-    std::vector<std::pair<const char*, uint32_t>> qualities_;
-    std::vector<std::pair<uint32_t, uint32_t>> positions_;
+  std::uint32_t first_;
+  std::uint32_t last_;
+  std::unique_ptr<Impl> pimpl_;
 };
 
-}
+}  // namespace racon
