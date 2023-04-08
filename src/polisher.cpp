@@ -1,9 +1,3 @@
-/*!
- * @file polisher.cpp
- *
- * @brief Polisher class source file
- */
-
 #include "polisher.hpp"
 
 #include <algorithm>
@@ -122,17 +116,17 @@ struct Polisher::Impl {
   Impl(Impl&&) = delete;
   Impl& operator=(Impl&&) = delete;
 
-  Impl(Dataset dataset, PolisherConfig config)
-      : dataset(std::move(dataset)), config(config) {}
+  Impl(PolisherConfig config, Data data)
+      : config(config), data(std::move(data)) {}
 
   std::vector<std::unique_ptr<Sequence>> Polish() {
     auto dst = std::vector<std::unique_ptr<Sequence>>();
-    dst.reserve(dataset.targets().size());
+    dst.reserve(data.targets().size());
 
     auto function_timer = biosoup::Timer();
 
     function_timer.Start();
-    const auto n_targets = dataset.targets().size();
+    const auto n_targets = data.targets().size();
 
     auto n_aligned = std::atomic_size_t(0);
     auto n_polished = std::atomic_size_t(0);
@@ -156,17 +150,16 @@ struct Polisher::Impl {
 
     function_timer.Start();
     tbb::parallel_for(
-        size_t(0), dataset.targets().size(), [&](size_t target_idx) -> void {
-          const auto& target_seq = dataset.targets()[target_idx];
+        size_t(0), data.targets().size(), [&](size_t target_idx) -> void {
+          const auto& target_seq = data.targets()[target_idx];
           const auto target_data = target_seq->data();
           const auto target_qual = target_seq->quality();
 
-          const auto target_overlaps = dataset.overlaps(target_idx);
-          tbb::parallel_for(size_t(0), target_overlaps.size(),
-                            [&](size_t ovlp_idx) -> void {
-                              dataset.overlaps(target_idx)[ovlp_idx]->cigar(
-                                  dataset.sequences());
-                            });
+          const auto target_overlaps = data.overlaps(target_idx);
+          tbb::parallel_for(
+              size_t(0), target_overlaps.size(), [&](size_t ovlp_idx) -> void {
+                data.overlaps(target_idx)[ovlp_idx]->cigar(data.sequences());
+              });
           ++n_aligned;
           report_state();
 
@@ -187,7 +180,7 @@ struct Polisher::Impl {
           }
 
           for (const auto& ovlp_ptr : target_overlaps) {
-            BindSegmentsToWindows(dataset.sequences(), windows, *ovlp_ptr);
+            BindSegmentsToWindows(data.sequences(), windows, *ovlp_ptr);
           }
 
           std::atomic<size_t> polish_cnt;
@@ -236,8 +229,8 @@ struct Polisher::Impl {
     return *engine;
   }
 
-  Dataset dataset;
   PolisherConfig config;
+  Data data;
 
   tbb::enumerable_thread_specific<std::unique_ptr<spoa::AlignmentEngine>>
       alignment_engines;
@@ -252,8 +245,8 @@ Polisher& Polisher::operator=(Polisher&& that) noexcept {
 
 Polisher::~Polisher() {}
 
-Polisher::Polisher(Dataset dataset, PolisherConfig config)
-    : pimpl_(std::make_unique<Impl>(std::move(dataset), config)) {}
+Polisher::Polisher(PolisherConfig config, Data data)
+    : pimpl_(std::make_unique<Impl>(config, std::move(data))) {}
 
 std::vector<std::unique_ptr<Sequence>> Polisher::Polish() {
   return pimpl_->Polish();

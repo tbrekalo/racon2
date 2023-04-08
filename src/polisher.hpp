@@ -1,10 +1,6 @@
 #pragma once
 
-#include <cstdint>
-#include <memory>
-#include <vector>
-
-#include "dataset.hpp"
+#include "data.hpp"
 
 namespace racon {
 
@@ -37,7 +33,7 @@ class Polisher {
 
   ~Polisher();
 
-  Polisher(Dataset dataset, PolisherConfig config);
+  Polisher(PolisherConfig config, Data data);
   std::vector<std::unique_ptr<Sequence>> Polish();
 
  private:

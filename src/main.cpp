@@ -3,7 +3,8 @@
 #include "cxxopts.hpp"
 #include "data.hpp"
 #include "fmt/core.h"
-#include "thread_pool/thread_pool.hpp"
+#include "polisher.hpp"
+#include "tbb/task_arena.h"
 #include "version.h"
 
 int main(int argc, char** argv) {
@@ -19,7 +20,9 @@ int main(int argc, char** argv) {
       cxxopts::value<double>()->default_value("0.3"));
   options.add_options("flags")
       ("f,fragment",
-       "fragment correction instead of conting polishing");
+       "fragment correction instead of conting polishing")
+      ("no-trimming",
+       "disable consensus trimming at window ends\n");
   options.add_options("info")
     ("h,help", "print help")
     ("v,version", "print version and quit");
@@ -63,15 +66,27 @@ int main(int argc, char** argv) {
       return EXIT_SUCCESS;
     }
 
-    auto thread_pool =
-        thread_pool::ThreadPool(result["threads"].as<uint32_t>());
-    const bool keep_all_overlaps = result.count("fragment");
+    tbb::task_arena arena(result["threads"].as<uint32_t>());
+    arena.execute([&] {
+      auto polisher = racon::Polisher(
+          /* polisher config */
+          racon::PolisherConfig{
+              .window_length = result["window-length"].as<uint32_t>(),
+              .quality_threshold = result["quality-threshold"].as<double>(),
+              .trim = result["no-trimming"].as<bool>(),
 
-    auto data = racon::LoadData(result["sequences"].as<std::string>(),
-                                result["overlaps"].as<std::string>(),
-                                result["targets"].as<std::string>(),
-                                result["error-threshold"].as<double>(),
-                                keep_all_overlaps);
+              .poa_cfg =
+                  racon::POAConfig{.match = result["match"].as<int8_t>(),
+                                   .mismatch = result["mismatch"].as<int8_t>(),
+                                   .gap = result["gap"].as<int8_t>()}},
+
+          /* polisher data */
+          racon::LoadData(result["sequences"].as<std::string>(),
+                          result["overlaps"].as<std::string>(),
+                          result["targets"].as<std::string>(),
+                          result["error-threshold"].as<double>(),
+                          result["fragment"].as<bool>()));
+    });
 
   } catch (const std::exception& e) {
     fmt::print(stderr, "{}", e.what());
