@@ -1,253 +1,82 @@
-#include <getopt.h>
+#include <cstdlib>
 
-#include <cstdio>
-#include <string>
-#include <vector>
-
-#include "biosoup/timer.hpp"
-#include "dataset.hpp"
+#include "cxxopts.hpp"
+#include "data.hpp"
 #include "fmt/core.h"
-#include "polisher.hpp"
-#include "sequence.hpp"
-#include "tbb/task_arena.h"
-
-#ifdef CUDA_ENABLED
-#include "cuda/cudapolisher.hpp"
-#endif
-
-#ifdef CUDA_ENABLED
-static const int32_t CUDAALIGNER_INPUT_CODE = 10000;
-static const int32_t CUDAALIGNER_BAND_WIDTH_INPUT_CODE = 10001;
-#endif
-
-static struct option options[] = {
-    {"include-unpolished", no_argument, 0, 'u'},
-    {"fragment-correction", no_argument, 0, 'f'},
-    {"window-length", required_argument, 0, 'w'},
-    {"quality-threshold", required_argument, 0, 'q'},
-    {"error-threshold", required_argument, 0, 'e'},
-    {"no-trimming", no_argument, 0, 'T'},
-    {"match", required_argument, 0, 'm'},
-    {"mismatch", required_argument, 0, 'x'},
-    {"gap", required_argument, 0, 'g'},
-    {"threads", required_argument, 0, 't'},
-    {"version", no_argument, 0, 'v'},
-    {"help", no_argument, 0, 'h'},
-#ifdef CUDA_ENABLED
-    {"cudapoa-batches", optional_argument, 0, 'c'},
-    {"cuda-banded-alignment", no_argument, 0, 'b'},
-    {"cudaaligner-batches", required_argument, 0, CUDAALIGNER_INPUT_CODE},
-    {"cudaaligner-band-width", required_argument, 0,
-     CUDAALIGNER_BAND_WIDTH_INPUT_CODE},
-#endif
-    {0, 0, 0, 0}};
-
-void help();
+#include "thread_pool/thread_pool.hpp"
+#include "version.h"
 
 int main(int argc, char** argv) {
-  std::vector<std::string> input_paths;
+  auto options = cxxopts::Options(
+      "racon2", "racon2 is a stand-alone read and assembly polishing tool");
 
-  uint32_t window_length = 500;
-  double quality_threshold = 10.0;
-  double error_threshold = 0.1;
-  bool trim = true;
+  /* clang-format off */
+  options.add_options("misc")
+    ("t,threads", "number of threads",
+      cxxopts::value<uint32_t>()->default_value("1"))
+    ("e,error-threshold", 
+     "maximum allowed error rate used for filtering overlaps",
+      cxxopts::value<double>()->default_value("0.3"));
+  options.add_options("flags")
+      ("f,fragment",
+       "fragment correction instead of conting polishing");
+  options.add_options("info")
+    ("h,help", "print help")
+    ("v,version", "print version and quit");
+  options.add_options("window arguments")
+    ("w,window-length", "size of window on which POA is performed",
+      cxxopts::value<uint32_t>()->default_value("200"))
+    ("q,quality-threshold", 
+     "threshold for average base quality of windows used in POA",
+      cxxopts::value<double>()->default_value("10.0"))
+    ("m,match", "score for matching bases",
+      cxxopts::value<int8_t>()->default_value("3"))
+    ("x,mismatch", "score for mismatching bases",
+      cxxopts::value<int8_t>()->default_value("-5"))
+    ("g,gap", "gap penalty (must be nagative)",
+      cxxopts::value<int8_t>()->default_value("-4"));
+  options.add_options("input")
+    ("sequences", "query sequences in FASTA/FASTQ format",
+      cxxopts::value<std::string>())
+    ("overlaps", "overlap file in MHAP/PAF/SAM format",
+      cxxopts::value<std::string>())
+    ("targets", "target sequences in FASTA/FASTQ format",
+      cxxopts::value<std::string>());
+  /* clang-format on */
 
-  int8_t match = 3;
-  int8_t mismatch = -5;
-  int8_t gap = -4;
-  uint32_t type = 0;
+  try {
+    options.parse_positional({"sequences", "overlaps", "targets"});
+    const auto result = options.parse(argc, argv);
 
-  bool drop_unpolished_sequences = true;
-  uint32_t num_threads = 1;
-
-  // uint32_t cudapoa_batches = 0;
-  // uint32_t cudaaligner_batches = 0;
-  // uint32_t cudaaligner_band_width = 0;
-  // bool cuda_banded_alignment = false;
-
-  std::string optstring = "ufw:q:e:m:x:g:t:h";
-  // #ifdef CUDA_ENABLED
-  //   optstring += "bc::";
-  // #endif
-
-  biosoup::Timer timer;
-  timer.Start();
-
-  int32_t argument;
-  while ((argument = getopt_long(argc, argv, optstring.c_str(), options,
-                                 nullptr)) != -1) {
-    switch (argument) {
-      case 'u':
-        drop_unpolished_sequences = false;
-        break;
-      case 'f':
-        type = 1;
-        break;
-      case 'w':
-        window_length = atoi(optarg);
-        break;
-      case 'q':
-        quality_threshold = atof(optarg);
-        break;
-      case 'e':
-        error_threshold = atof(optarg);
-        break;
-      case 'T':
-        trim = false;
-        break;
-      case 'm':
-        match = atoi(optarg);
-        break;
-      case 'x':
-        mismatch = atoi(optarg);
-        break;
-      case 'g':
-        gap = atoi(optarg);
-        break;
-      case 't':
-        num_threads = atoi(optarg);
-        break;
-      case 'v':
-        fmt::print("{}\n", VERSION);
-        exit(EXIT_SUCCESS);
-      case 'h':
-        help();
-        exit(EXIT_SUCCESS);
-        // #ifdef CUDA_ENABLED
-        //       case 'c':
-        //         // if option c encountered, cudapoa_batches initialized with
-        //         a default
-        //         // value of 1.
-        //         cudapoa_batches = 1;
-        //         // next text entry is not an option, assuming it's the arg
-        //         for option
-        //         // 'c'
-        //         if (optarg == NULL && argv[optind] != NULL && argv[optind][0]
-        //         != '-') {
-        //           cudapoa_batches = atoi(argv[optind++]);
-        //         }
-        //         // optional argument provided in the ususal way
-        //         if (optarg != NULL) {
-        //           cudapoa_batches = atoi(optarg);
-        //         }
-        //         break;
-        //       case 'b':
-        //         cuda_banded_alignment = true;
-        //         break;
-        //       case CUDAALIGNER_INPUT_CODE:  // cudaaligner-batches
-        //         cudaaligner_batches = atoi(optarg);
-        //         break;
-        //       case CUDAALIGNER_BAND_WIDTH_INPUT_CODE:  //
-        //       cudaaligner-band-width
-        //         cudaaligner_band_width = atoi(optarg);
-        //         break;
-        // #endif
-      default:
-        exit(EXIT_FAILURE);
+    if (result.count("help")) {
+      fmt::print(stderr, "{}", options.help());
+      return EXIT_SUCCESS;
     }
-  }
+    if (result.count("version")) {
+      /* clang-format off */
+      fmt::print(stderr, "racon {}.{}.{}",
+        racon_VERSION_MAJOR,
+        racon_VERSION_MINOR, 
+        racon_VERSION_PATCH
+      );
+      /* clang-format on */
+      return EXIT_SUCCESS;
+    }
 
-  for (int32_t i = optind; i < argc; ++i) {
-    input_paths.emplace_back(argv[i]);
-  }
+    auto thread_pool =
+        thread_pool::ThreadPool(result["threads"].as<uint32_t>());
+    const bool keep_all_overlaps = result.count("fragment");
 
-  if (input_paths.size() < 3) {
-    fmt::print(stderr, "[racon] error: missing input file(s)!\n");
-    help();
+    auto data = racon::LoadData(result["sequences"].as<std::string>(),
+                                result["overlaps"].as<std::string>(),
+                                result["targets"].as<std::string>(),
+                                result["error-threshold"].as<double>(),
+                                keep_all_overlaps);
 
+  } catch (const std::exception& e) {
+    fmt::print(stderr, "{}", e.what());
     return EXIT_FAILURE;
   }
 
-  tbb::task_arena ta(num_threads);
-  ta.execute([&]() -> void {
-    auto dataset = racon::LoadDataset(
-        input_paths[0], input_paths[1], input_paths[2], error_threshold, type);
-
-    racon::Polisher polisher(
-        std::move(dataset),
-        racon::PolisherConfig{
-            .window_length = window_length,
-            .quality_threshold = quality_threshold,
-            .trim = trim,
-            .poa_cfg = racon::POAConfig{
-                .match = match, .mismatch = mismatch, .gap = gap}});
-
-    auto polished_sequences = polisher.Polish();
-
-    for (const auto& it : polished_sequences) {
-      fmt::print(stdout, ">{}\n{}\n", it->name(), it->data());
-    }
-  });
-
-  fmt::print(stderr, "[racon2]({:12.3f})", timer.Stop());
-
   return EXIT_SUCCESS;
-}
-
-void help() {
-  printf(
-      "usage: racon [options ...] <sequences> <overlaps> <target sequences>\n"
-      "\n"
-      "    #default output is stdout\n"
-      "    <sequences>\n"
-      "        input file in FASTA/FASTQ format (can be compressed with gzip)\n"
-      "        containing sequences used for correction\n"
-      "    <overlaps>\n"
-      "        input file in MHAP/PAF/SAM format (can be compressed with "
-      "gzip)\n"
-      "        containing overlaps between sequences and target sequences\n"
-      "    <target sequences>\n"
-      "        input file in FASTA/FASTQ format (can be compressed with gzip)\n"
-      "        containing sequences which will be corrected\n"
-      "\n"
-      "    options:\n"
-      "        -u, --include-unpolished\n"
-      "            output unpolished target sequences\n"
-      "        -f, --fragment-correction\n"
-      "            perform fragment correction instead of contig polishing\n"
-      "            (overlaps file should contain dual/self overlaps!)\n"
-      "        -w, --window-length <int>\n"
-      "            default: 500\n"
-      "            size of window on which POA is performed\n"
-      "        -q, --quality-threshold <float>\n"
-      "            default: 10.0\n"
-      "            threshold for average base quality of windows used in POA\n"
-      "        -e, --error-threshold <float>\n"
-      "            default: 0.1\n"
-      "            maximum allowed error rate used for filtering overlaps\n"
-      "        --no-trimming\n"
-      "            disables consensus trimming at window ends\n"
-      "        -m, --match <int>\n"
-      "            default: 3\n"
-      "            score for matching bases\n"
-      "        -x, --mismatch <int>\n"
-      "            default: -5\n"
-      "            score for mismatching bases\n"
-      "        -g, --gap <int>\n"
-      "            default: -4\n"
-      "            gap penalty (must be negative)\n"
-      "        -t, --threads <int>\n"
-      "            default: 1\n"
-      "            number of threads\n"
-      "        --version\n"
-      "            prints the version number\n"
-      "        -h, --help\n"
-      "            prints the usage\n"
-#ifdef CUDA_ENABLED
-      "        -c, --cudapoa-batches <int>\n"
-      "            default: 0\n"
-      "            number of batches for CUDA accelerated polishing per GPU\n"
-      "        -b, --cuda-banded-alignment\n"
-      "            use banding approximation for alignment on GPU\n"
-      "        --cudaaligner-batches <int>\n"
-      "            default: 0\n"
-      "            number of batches for CUDA accelerated alignment per GPU\n"
-      "        --cudaaligner-band-width <int>\n"
-      "            default: 0\n"
-      "            Band width for cuda alignment. Must be >= 0. Non-zero "
-      "allows user defined \n"
-      "            band width, whereas 0 implies auto band width "
-      "determination.\n"
-#endif
-  );
 }

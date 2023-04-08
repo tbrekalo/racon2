@@ -1,4 +1,4 @@
-#include "dataset.hpp"
+#include "data.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -9,24 +9,23 @@
 #include "io.hpp"
 #include "overlap.hpp"
 #include "sequence.hpp"
-#include "tbb/parallel_for.h"
 
 namespace racon {
 
 static constexpr uint32_t kChunkSize = 1024 * 1024 * 1024;  // ~ 1GB
 
-Dataset::Dataset(Dataset&& that) noexcept : pimpl_(std::move(that.pimpl_)) {}
+Data::Data(Data&& that) noexcept : pimpl_(std::move(that.pimpl_)) {}
 
-Dataset::~Dataset() {}
+Data::~Data() {}
 
-Dataset& Dataset::operator=(Dataset&& that) noexcept {
+Data& Data::operator=(Data&& that) noexcept {
   pimpl_ = std::move(that.pimpl_);
   return *this;
 }
 
-Dataset::Dataset(std::unique_ptr<Impl> pimpl) : pimpl_(std::move(pimpl)) {}
+Data::Data(std::unique_ptr<Impl> pimpl) : pimpl_(std::move(pimpl)) {}
 
-struct Dataset::Impl {
+struct Data::Impl {
   std::vector<std::unique_ptr<Sequence>> sequences;
   std::vector<std::vector<std::unique_ptr<Overlap>>> target_overlaps;
 
@@ -34,25 +33,24 @@ struct Dataset::Impl {
   std::span<std::unique_ptr<Sequence>> queries_span;
 };
 
-std::span<const std::unique_ptr<Sequence>> Dataset::sequences() const {
+std::span<const std::unique_ptr<Sequence>> Data::sequences() const {
   return pimpl_->sequences;
 }
-std::span<const std::unique_ptr<Sequence>> Dataset::targets() const {
+std::span<const std::unique_ptr<Sequence>> Data::targets() const {
   return pimpl_->targets_span;
 }
-std::span<const std::unique_ptr<Sequence>> Dataset::queries() const {
+std::span<const std::unique_ptr<Sequence>> Data::queries() const {
   return pimpl_->queries_span;
 }
 
-std::span<const std::unique_ptr<Overlap>> Dataset::overlaps(
+std::span<const std::unique_ptr<Overlap>> Data::overlaps(
     std::uint32_t target_id) const {
   return pimpl_->target_overlaps[target_id];
 }
 
-Dataset LoadDataset(const std::string& sequences_path,
-                    const std::string& overlaps_path,
-                    const std::string& targets_path, double error_threshold,
-                    bool keep_all) {
+Data LoadData(const std::string& sequences_path,
+              const std::string& overlaps_path, const std::string& targets_path,
+              double error_threshold, bool keep_all) {
   biosoup::Timer timer;
   timer.Start();
 
@@ -241,9 +239,9 @@ Dataset LoadDataset(const std::string& sequences_path,
         "empty overlap set!\n");
   }
 
-  tbb::parallel_for(size_t(0), sequences.size(), [&](size_t j) -> void {
+  for (size_t j = 0; j < sequences.size(); ++j) {
     sequences[j]->transmute(has_name[j], has_data[j], has_reverse_data[j]);
-  });
+  }
 
   fmt::print(stderr,
              "[racon2::loadAndFormatDataset]({:12.3f}) loaded {} overlaps\n",
@@ -259,10 +257,10 @@ Dataset LoadDataset(const std::string& sequences_path,
     overlaps[all_overlaps[i]->t_id()].push_back(std::move(all_overlaps[i]));
   }
 
-  return Dataset(std::make_unique<Dataset::Impl>(
-      Dataset::Impl{.sequences = std::move(sequences),
-                    .target_overlaps = std::move(overlaps),
-                    .targets_span = targets_span,
-                    .queries_span = queries_span}));
+  return Data(std::make_unique<Data::Impl>(
+      Data::Impl{.sequences = std::move(sequences),
+                 .target_overlaps = std::move(overlaps),
+                 .targets_span = targets_span,
+                 .queries_span = queries_span}));
 }
 }  // namespace racon

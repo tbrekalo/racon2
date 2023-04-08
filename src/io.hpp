@@ -7,10 +7,9 @@
 namespace racon {
 
 std::unique_ptr<bioparser::Parser<Sequence>> createSequenceParser(
-    const std::string& sequnces_path);
+    const std::string& sequences_path);
 
 std::unique_ptr<bioparser::Parser<Overlap>> createOverlapParser(
     const std::string& overlaps_path);
-
 
 }  // namespace racon

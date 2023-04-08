@@ -1,13 +1,13 @@
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.16)
 
 project(
-  racon2
-  VERSION 0.1
+  racon
+  VERSION 2.0.0
   LANGUAGES C CXX
   DESCRIPTION "Racon2 is a consensus module for de novo genome assembly.")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pedantic")
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -19,11 +19,10 @@ include(FetchContent)
 include(GNUInstallDirs)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
-  set(racon2_main_project ON)
+  set(racon_main_project ON)
 endif()
-option(racon2_build_tests "Build unit tests" ${racon2_main_project})
-option(racon2_build_wrapper "Build wrapper" OFF)
-option(racon2_enable_cuda "Build with NVIDIA CUDA support" OFF)
+# option(racon_build_tests "Build unit tests" ${racon_main_project})
+# option(racon_build_wrapper "Build wrapper" OFF)
 
 find_package(bioparser 3.0.15 QUIET)
 if(NOT bioparser_FOUND)
@@ -40,6 +39,21 @@ if(NOT bioparser_FOUND)
   endif()
 endif()
 
+find_package(biosoup 0.10.0 QUIET)
+if(NOT biosoup_FOUND)
+  FetchContent_Declare(
+    biosoup
+    GIT_REPOSITORY https://github.com/tbrekalo/biosoup
+    GIT_TAG master)
+
+  FetchContent_GetProperties(biosoup)
+  if(NOT biosoup_POPULATED)
+    FetchContent_Populate(biosoup)
+    add_subdirectory(${biosoup_SOURCE_DIR} ${biosoup_BINARY_DIR}
+                     EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
 find_package(edlib 1.2.7 QUIET)
 if(NOT edlib_FOUND)
   FetchContent_Declare(
@@ -51,6 +65,49 @@ if(NOT edlib_FOUND)
   if(NOT edlib_POPULATED)
     FetchContent_Populate(edlib)
     add_subdirectory(${edlib_SOURCE_DIR} ${edlib_BINARY_DIR} EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+find_package(fmt 9.1.0 QUIET)
+if(NOT fmt_FOUND)
+  FetchContent_Declare(
+    fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt
+    GIT_TAG 9.1.0)
+
+  FetchContent_GetProperties(fmt)
+  if(NOT fmt_POPULATED)
+    FetchContent_Populate(fmt)
+    add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR} EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+find_package(cxxopts 3.1.1 QUIET)
+if(NOT cxxopts_FOUND)
+  FetchContent_Declare(
+    cxxopts
+    GIT_REPOSITORY https://github.com/jarro2783/cxxopts
+    GIT_TAG v3.1.1)
+
+  FetchContent_GetProperties(cxxopts)
+  if(NOT cxxopts_POPULATED)
+    FetchContent_Populate(cxxopts)
+    add_subdirectory(${cxxopts_SOURCE_DIR} ${cxxopts_BINARY_DIR}
+                     EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
+find_package(spdlog 4.0.8 QUIET)
+if(NOT spdlog_FOUND)
+  FetchContent_Declare(
+    spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog
+    GIT_TAG v1.11.0)
+
+  FetchContent_GetProperties(spdlog)
+  if(NOT spdlog_POPULATED)
+    FetchContent_Populate(spdlog)
+    add_subdirectory(${spdlog_SOURCE_DIR} ${spdlog_BINARY_DIR} EXCLUDE_FROM_ALL)
   endif()
 endif()
 
@@ -83,7 +140,7 @@ if(NOT thread_pool_FOUND)
   endif()
 endif()
 
-if(racon2_build_tests)
+if(racon_build_tests)
   find_package(GTest 1.10.0 QUIET)
   if(NOT GTest_FOUND)
     FetchContent_Declare(
@@ -101,125 +158,42 @@ if(racon2_build_tests)
   endif()
 endif()
 
-if(racon2_build_wrapper)
-  find_package(rampler 2.0.0 QUIET)
-  if(NOT rampler_FOUND)
-    FetchContent_Declare(
-      rampler
-      GIT_REPOSITORY https://github.com/rvaser/rampler
-      GIT_TAG 2.0.0)
+set(racon_sources src/logger.cpp src/polisher.cpp src/overlap.cpp
+                  src/sequence.cpp src/window.cpp src/data.cpp src/io.cpp)
 
-    FetchContent_GetProperties(rampler)
-    if(NOT rampler_POPULATED)
-      FetchContent_Populate(rampler)
-      add_subdirectory(${rampler_SOURCE_DIR} ${rampler_BINARY_DIR})
-    endif()
-  endif()
-endif()
-
-if(racon2_enable_cuda)
-  find_package(CUDA 9.0 QUIET REQUIRED)
-  if(NOT ${CUDA_FOUND})
-    message(FATAL_ERROR "CUDA not detected on system. Please install")
-  else()
-    message(STATUS "Using CUDA ${CUDA_VERSION} from ${CUDA_TOOLKIT_ROOT_DIR}")
-    set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -lineinfo")
-  endif()
-  if(DEFINED CLARAGENOMICSANALYSIS_SDK_PATH)
-    list(APPEND CMAKE_PREFIX_PATH "${CLARAGENOMICSANALYSIS_SDK_PATH}/cmake")
-    find_package(cudapoa REQUIRED)
-    find_package(cudaaligner REQUIRED)
-  elseif(DEFINED CLARAGENOMICSANALYSIS_SRC_PATH)
-    if(NOT TARGET cudapoa)
-      add_subdirectory(${CLARAGENOMICSANALYSIS_SRC_PATH}
-                       ${CMAKE_CURRENT_BINARY_DIR}/GenomeWorks EXCLUDE_FROM_ALL)
-    endif()
-    if(NOT TARGET cudaaligner)
-      add_subdirectory(${CLARAGENOMICSANALYSIS_SRC_PATH}
-                       ${CMAKE_CURRENT_BINARY_DIR}/GenomeWorks EXCLUDE_FROM_ALL)
-    endif()
-  else()
-    FetchContent_Declare(
-      genomeworks
-      GIT_REPOSITORY https://github.com/clara-parabricks/GenomeWorks
-      GIT_TAG v0.5.3)
-
-    FetchContent_GetProperties(genomeworks)
-    if(NOT genomeworks_POPULATED)
-      FetchContent_Populate(genomeworks)
-      add_subdirectory(${genomeworks_SOURCE_DIR} ${genomeworks_BINARY_DIR}
-                       EXCLUDE_FROM_ALL)
-    endif()
-  endif()
-endif()
-
-set(racon2_sources src/logger.cpp src/polisher.cpp src/overlap.cpp
-                  src/sequence.cpp src/window.cpp)
-
-if(racon2_enable_cuda)
-  include_directories(${PROJECT_SOURCE_DIR}/src)
-  list(APPEND racon2_sources src/cuda/cudapolisher.cpp src/cuda/cudabatch.cpp
-       src/cuda/cudaaligner.cpp)
-
-  cuda_add_library(racon2 ${racon2_sources})
-
-  target_compile_definitions(racon2 PRIVATE CUDA_ENABLED)
-else()
-  add_library(racon2 ${racon2_sources})
-endif()
-
-target_link_libraries(racon2 bioparser::bioparser edlib::edlib spoa::spoa
-                      TBB::tbb)
-
-if(racon2_enable_cuda)
-  target_link_libraries(racon2 cudapoa cudaaligner)
-endif()
+add_library(racon ${racon_sources})
+target_link_libraries(
+  racon
+  PUBLIC bioparser::bioparser biosoup::biosoup edlib::edlib spoa::spoa
+         thread_pool::thread_pool
+  PRIVATE fmt::fmt)
 
 target_include_directories(
-  racon2 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+  racon PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
 
-add_executable(racon2_exe src/main.cpp)
+add_executable(racon_exe src/main.cpp)
+target_link_libraries(racon_exe cxxopts::cxxopts fmt::fmt racon)
 
-target_link_libraries(racon2_exe racon2)
+target_compile_options(
+  racon_exe PUBLIC $<$<CONFIG:Debug,RelWithDebInfo>:-fsanitize=address>
+                   $<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>)
+target_link_options(racon_exe PUBLIC
+                    $<$<CONFIG:Debug,RelWithDebInfo>:-fsanitize=address>)
 
-if(racon2_enable_cuda)
-  target_compile_definitions(racon2_exe PRIVATE CUDA_ENABLED)
-endif()
+set_target_properties(racon_exe PROPERTIES VERSION ${racon_VERSION}
+                                           SOVERSION ${racon_VERSION_MAJOR})
+configure_file(${PROJECT_SOURCE_DIR}/src/version.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/include/version.h)
+target_include_directories(racon_exe
+                           PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/include)
 
-target_compile_definitions(racon2_exe PRIVATE VERSION="${PROJECT_VERSION}")
-set_property(TARGET racon2_exe PROPERTY OUTPUT_NAME racon22)
+set_property(TARGET racon_exe PROPERTY OUTPUT_NAME racon2)
+install(TARGETS racon_exe DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-install(TARGETS racon2_exe DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-if(racon2_build_tests)
-  add_executable(racon2_test test/racon_test.cpp)
-
-  target_link_libraries(racon2_test racon2 GTest::Main)
-
-  target_compile_definitions(
-    racon2_test PRIVATE TEST_DATA="${PROJECT_SOURCE_DIR}/test/data/")
-
-  if(racon2_enable_cuda)
-    target_compile_definitions(racon2_test PRIVATE CUDA_ENABLED)
-  endif()
-endif()
-
-if(racon2_build_wrapper)
-  set(racon2_path ${PROJECT_BINARY_DIR}/bin/racon2)
-  set(rampler_path ${PROJECT_BINARY_DIR}/_deps/rampler-build/bin/rampler)
-  if(racon2_enable_cuda)
-    set(racon2_wrapper_enable_cuda True)
-  else()
-    set(racon2_wrapper_enable_cuda False)
-  endif()
-  configure_file(${PROJECT_SOURCE_DIR}/scripts/racon2_wrapper.py
-                 ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/racon2_wrapper)
-  file(
-    COPY ${PROJECT_BINARY_DIR}/${CMAKE_FILES_DIRECTORY}/racon2_wrapper
-    DESTINATION ${PROJECT_BINARY_DIR}/bin
-    FILE_PERMISSIONS OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
-                     WORLD_READ WORLD_EXECUTE)
-endif()
+# if(racon_build_tests) add_executable(racon_test test/racon_test.cpp)
+# target_link_libraries(racon_test racon GTest::Main)
+# target_compile_definitions( racon_test PRIVATE
+# TEST_DATA="${PROJECT_SOURCE_DIR}/test/data/") endif()
 
 # Add Debian packaging
 set(CPACK_GENERATOR "DEB")

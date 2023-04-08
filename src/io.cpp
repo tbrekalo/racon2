@@ -1,6 +1,5 @@
 #include "io.hpp"
 
-#include <stdexcept>
 #include <string_view>
 
 #include "bioparser/fasta_parser.hpp"
@@ -9,7 +8,6 @@
 #include "bioparser/paf_parser.hpp"
 #include "bioparser/parser.hpp"
 #include "bioparser/sam_parser.hpp"
-#include "sequence.hpp"
 
 namespace racon {
 

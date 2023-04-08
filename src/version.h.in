@@ -1,0 +1,3 @@
+#define racon_VERSION_MAJOR @racon_VERSION_MAJOR@
+#define racon_VERSION_MINOR @racon_VERSION_MINOR@
+#define racon_VERSION_PATCH @racon_VERSION_PATCH@
