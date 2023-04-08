@@ -54,6 +54,21 @@ if(NOT biosoup_FOUND)
   endif()
 endif()
 
+find_package(cxxopts 3.1.1 QUIET)
+if(NOT cxxopts_FOUND)
+  FetchContent_Declare(
+    cxxopts
+    GIT_REPOSITORY https://github.com/jarro2783/cxxopts
+    GIT_TAG v3.1.1)
+
+  FetchContent_GetProperties(cxxopts)
+  if(NOT cxxopts_POPULATED)
+    FetchContent_Populate(cxxopts)
+    add_subdirectory(${cxxopts_SOURCE_DIR} ${cxxopts_BINARY_DIR}
+                     EXCLUDE_FROM_ALL)
+  endif()
+endif()
+
 find_package(edlib 1.2.7 QUIET)
 if(NOT edlib_FOUND)
   FetchContent_Declare(
@@ -79,21 +94,6 @@ if(NOT fmt_FOUND)
   if(NOT fmt_POPULATED)
     FetchContent_Populate(fmt)
     add_subdirectory(${fmt_SOURCE_DIR} ${fmt_BINARY_DIR} EXCLUDE_FROM_ALL)
-  endif()
-endif()
-
-find_package(cxxopts 3.1.1 QUIET)
-if(NOT cxxopts_FOUND)
-  FetchContent_Declare(
-    cxxopts
-    GIT_REPOSITORY https://github.com/jarro2783/cxxopts
-    GIT_TAG v3.1.1)
-
-  FetchContent_GetProperties(cxxopts)
-  if(NOT cxxopts_POPULATED)
-    FetchContent_Populate(cxxopts)
-    add_subdirectory(${cxxopts_SOURCE_DIR} ${cxxopts_BINARY_DIR}
-                     EXCLUDE_FROM_ALL)
   endif()
 endif()
 
@@ -125,19 +125,15 @@ if(NOT spoa_FOUND)
   endif()
 endif()
 
-find_package(thread_pool 4.0.0 QUIET)
-if(NOT thread_pool_FOUND)
-  FetchContent_Declare(
-    thread_pool
-    GIT_REPOSITORY https://github.com/rvaser/thread_pool
-    GIT_TAG 4.0.0)
+FetchContent_Declare(
+  wfa2
+  GIT_REPOSITORY https://github.com/smarco/WFA2-lib
+  GIT_TAG development)
 
-  FetchContent_GetProperties(thread_pool)
-  if(NOT thread_pool_POPULATED)
-    FetchContent_Populate(thread_pool)
-    add_subdirectory(${thread_pool_SOURCE_DIR} ${thread_pool_BINARY_DIR}
-                     EXCLUDE_FROM_ALL)
-  endif()
+FetchContent_GetProperties(wfa2)
+if(NOT wfa2_POPULATED)
+  FetchContent_Populate(wfa2)
+  add_subdirectory(${wfa2_SOURCE_DIR} ${wfa2_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
 
 if(racon_build_tests)
@@ -158,15 +154,21 @@ if(racon_build_tests)
   endif()
 endif()
 
-set(racon_sources src/logger.cpp src/polisher.cpp src/overlap.cpp
-                  src/sequence.cpp src/window.cpp src/data.cpp src/io.cpp)
+find_package(tbb)
+set(racon_sources
+    src/logger.cpp
+    src/polisher.cpp
+    src/overlap.cpp
+    src/sequence.cpp
+    src/window.cpp
+    src/data.cpp
+    src/io.cpp)
 
 add_library(racon ${racon_sources})
 target_link_libraries(
   racon
   PUBLIC bioparser::bioparser biosoup::biosoup edlib::edlib spoa::spoa
-         thread_pool::thread_pool
-  PRIVATE fmt::fmt)
+  PRIVATE fmt::fmt tbb wfa2cpp_static)
 
 target_include_directories(
   racon PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
