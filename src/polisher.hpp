@@ -13,7 +13,9 @@ struct POAConfig {
 struct PolisherConfig {
   uint32_t window_length;
   double quality_threshold;
+
   bool trim;
+  bool include_unpolished;
 
   POAConfig poa_cfg;
 };

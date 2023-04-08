@@ -4,6 +4,7 @@
 #include "data.hpp"
 #include "fmt/core.h"
 #include "polisher.hpp"
+#include "sequence.hpp"
 #include "tbb/task_arena.h"
 #include "version.h"
 
@@ -22,7 +23,8 @@ int main(int argc, char** argv) {
       ("f,fragment",
        "fragment correction instead of conting polishing")
       ("no-trimming",
-       "disable consensus trimming at window ends\n");
+       "disable consensus trimming at window ends\n")
+      ("u,include-unpolished", "output unpolished target sequences");
   options.add_options("info")
     ("h,help", "print help")
     ("v,version", "print version and quit");
@@ -73,7 +75,9 @@ int main(int argc, char** argv) {
           racon::PolisherConfig{
               .window_length = result["window-length"].as<uint32_t>(),
               .quality_threshold = result["quality-threshold"].as<double>(),
+
               .trim = result["no-trimming"].as<bool>(),
+              .include_unpolished = result["include-unpolished"].as<bool>(),
 
               .poa_cfg =
                   racon::POAConfig{.match = result["match"].as<int8_t>(),
@@ -86,6 +90,11 @@ int main(int argc, char** argv) {
                           result["targets"].as<std::string>(),
                           result["error-threshold"].as<double>(),
                           result["fragment"].as<bool>()));
+
+      auto corrected = polisher.Polish();
+      for (auto& it : corrected) {
+        fmt::print(">{}\n{}\n", it->name(), it->data());
+      }
     });
 
   } catch (const std::exception& e) {

@@ -183,13 +183,13 @@ struct Polisher::Impl {
             BindSegmentsToWindows(data.sequences(), windows, *ovlp_ptr);
           }
 
-          std::atomic<size_t> polish_cnt;
+          std::atomic<size_t> n_polished_windows;
           std::vector<std::string> window_consensues(windows.size());
           tbb::parallel_for(
               size_t(0), windows.size(), [&](size_t window_idx) -> void {
                 auto consensus_flag = windows[window_idx].GenerateConsensus(
                     GetAlignmentEngine(config.poa_cfg), config.trim);
-                polish_cnt += consensus_flag.second;
+                n_polished_windows += consensus_flag.second;
                 window_consensues[window_idx] = std::move(consensus_flag.first);
               });
 
@@ -203,14 +203,18 @@ struct Polisher::Impl {
             consensus_seq += it;
           }
 
-          std::string tags;
-          tags += " LN:i:" + std::to_string(seq_len);
-          tags += " RC:i:" + std::to_string(target_overlaps.size());
-          tags += " XC:f:" + std::to_string(static_cast<double>(polish_cnt) /
-                                            windows.size());
+          const auto polished_ratio =
+              static_cast<double>(n_polished_windows) / windows.size();
 
-          dst.push_back(CreateSequence(std::string(target_seq->name()) + tags,
-                                       consensus_seq));
+          if (config.include_unpolished || polished_ratio > 0) {
+            std::string tags;
+            tags += " LN:i:" + std::to_string(seq_len);
+            tags += " RC:i:" + std::to_string(target_overlaps.size());
+            tags += " XC:f:" + std::to_string(polished_ratio);
+
+            dst.push_back(CreateSequence(std::string(target_seq->name()) + tags,
+                                         consensus_seq));
+          }
 
           ++n_polished;
           report_state();
