@@ -21,8 +21,7 @@ include(GNUInstallDirs)
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   set(racon_main_project ON)
 endif()
-# option(racon_build_tests "Build unit tests" ${racon_main_project})
-# option(racon_build_wrapper "Build wrapper" OFF)
+option(racon_build_wrapper "Build wrapper" OFF)
 
 find_package(bioparser 3.0.15 QUIET)
 if(NOT bioparser_FOUND)
@@ -136,25 +135,7 @@ if(NOT wfa2_POPULATED)
   add_subdirectory(${wfa2_SOURCE_DIR} ${wfa2_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
 
-if(racon_build_tests)
-  find_package(GTest 1.10.0 QUIET)
-  if(NOT GTest_FOUND)
-    FetchContent_Declare(
-      googletest
-      GIT_REPOSITORY https://github.com/google/googletest
-      GIT_TAG release-1.10.0)
-
-    FetchContent_GetProperties(googletest)
-    if(NOT googletest_POPULATED)
-      FetchContent_Populate(googletest)
-      add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR}
-                       EXCLUDE_FROM_ALL)
-      add_library(GTest::Main ALIAS gtest_main)
-    endif()
-  endif()
-endif()
-
-find_package(tbb)
+find_package(TBB REQUIRED)
 set(racon_sources
     src/logger.cpp
     src/polisher.cpp
@@ -191,11 +172,6 @@ target_include_directories(racon_exe
 
 set_property(TARGET racon_exe PROPERTY OUTPUT_NAME racon2)
 install(TARGETS racon_exe DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-# if(racon_build_tests) add_executable(racon_test test/racon_test.cpp)
-# target_link_libraries(racon_test racon GTest::Main)
-# target_compile_definitions( racon_test PRIVATE
-# TEST_DATA="${PROJECT_SOURCE_DIR}/test/data/") endif()
 
 # Add Debian packaging
 set(CPACK_GENERATOR "DEB")
