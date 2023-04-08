@@ -50,10 +50,14 @@ auto BindSegmentsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
                           : sequences[q_id]->reverse_complement().substr(
                                 q_len - q_last + 1, len);
 
-    const auto quality = !ovlp.strand()
-                             ? sequences[q_id]->quality().substr(q_first, len)
-                             : sequences[q_id]->reverse_quality().substr(
-                                   q_len - q_last + 1, len);
+    const auto quality = [&] {
+      if (sequences[q_id]->reverse_quality().empty()) {
+        return std::string_view{};
+      }
+      return !ovlp.strand() ? sequences[q_id]->quality().substr(q_first, len)
+                            : sequences[q_id]->reverse_quality().substr(
+                                  q_len - q_last + 1, len);
+    }();
 
     windows[window_idx].AddLayer(data, quality, t_first, t_last);
   };

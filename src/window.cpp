@@ -58,14 +58,18 @@ struct Window::Impl {
         subgraph.UpdateAlignment(mapping, &alignment);
       }
 
-      if (!qualities[i].empty()) {
-        graph.AddAlignment(alignment, sequences[i].data(),
-                           sequences[i].length());
+      /* clang-format off */
+      if (qualities[i].empty()) {
+        graph.AddAlignment(
+          alignment,
+          sequences[i].data(), sequences[i].length());
       } else {
-        graph.AddAlignment(alignment, sequences[i].data(),
-                           sequences[i].length(), qualities[i].data(),
-                           qualities[i].length());
+        graph.AddAlignment(
+          alignment,
+          sequences[i].data(), sequences[i].length(),
+          qualities[i].data(), qualities[i].length());
       }
+      /* clang-format on */
     }
 
     std::vector<uint32_t> coverages;
