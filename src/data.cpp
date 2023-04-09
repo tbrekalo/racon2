@@ -9,6 +9,7 @@
 #include "io.hpp"
 #include "overlap.hpp"
 #include "sequence.hpp"
+#include "tbb/parallel_for.h"
 
 namespace racon {
 
@@ -239,9 +240,9 @@ Data LoadData(const std::string& sequences_path,
         "empty overlap set!\n");
   }
 
-  for (size_t j = 0; j < sequences.size(); ++j) {
+  tbb::parallel_for(size_t(0), sequences.size(), [&](size_t j) {
     sequences[j]->transmute(has_name[j], has_data[j], has_reverse_data[j]);
-  }
+  });
 
   fmt::print(stderr,
              "[racon2::loadAndFormatDataset]({:12.3f}) loaded {} overlaps\n",
