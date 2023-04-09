@@ -82,16 +82,15 @@ int main(int argc, char** argv) {
               .poa_cfg =
                   racon::POAConfig{.match = result["match"].as<int8_t>(),
                                    .mismatch = result["mismatch"].as<int8_t>(),
-                                   .gap = result["gap"].as<int8_t>()}},
+                                   .gap = result["gap"].as<int8_t>()}});
 
-          /* polisher data */
+      auto corrected = polisher.Polish(
           racon::LoadData(result["sequences"].as<std::string>(),
                           result["overlaps"].as<std::string>(),
                           result["targets"].as<std::string>(),
                           result["error-threshold"].as<double>(),
                           result["fragment"].as<bool>()));
 
-      auto corrected = polisher.Polish();
       for (auto& it : corrected) {
         fmt::print(">{}\n{}\n", it->name(), it->data());
       }

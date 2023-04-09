@@ -35,8 +35,8 @@ class Polisher {
 
   ~Polisher();
 
-  Polisher(PolisherConfig config, Data data);
-  std::vector<std::unique_ptr<Sequence>> Polish();
+  Polisher(PolisherConfig config);
+  std::vector<std::unique_ptr<Sequence>> Polish(Data data);
 
  private:
   struct Impl;

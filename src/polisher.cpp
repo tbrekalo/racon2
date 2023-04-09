@@ -120,10 +120,9 @@ struct Polisher::Impl {
   Impl(Impl&&) = delete;
   Impl& operator=(Impl&&) = delete;
 
-  Impl(PolisherConfig config, Data data)
-      : config(config), data(std::move(data)) {}
+  Impl(PolisherConfig config) : config(config) {}
 
-  std::vector<std::unique_ptr<Sequence>> Polish() {
+  std::vector<std::unique_ptr<Sequence>> Polish(Data data) {
     auto dst = std::vector<std::unique_ptr<Sequence>>();
     dst.reserve(data.targets().size());
 
@@ -238,8 +237,6 @@ struct Polisher::Impl {
   }
 
   PolisherConfig config;
-  Data data;
-
   tbb::enumerable_thread_specific<std::unique_ptr<spoa::AlignmentEngine>>
       alignment_engines;
 };
@@ -253,11 +250,11 @@ Polisher& Polisher::operator=(Polisher&& that) noexcept {
 
 Polisher::~Polisher() {}
 
-Polisher::Polisher(PolisherConfig config, Data data)
-    : pimpl_(std::make_unique<Impl>(config, std::move(data))) {}
+Polisher::Polisher(PolisherConfig config)
+    : pimpl_(std::make_unique<Impl>(config)) {}
 
-std::vector<std::unique_ptr<Sequence>> Polisher::Polish() {
-  return pimpl_->Polish();
+std::vector<std::unique_ptr<Sequence>> Polisher::Polish(Data data) {
+  return pimpl_->Polish(std::move(data));
 }
 
 }  // namespace racon
