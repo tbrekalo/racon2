@@ -19,7 +19,8 @@
 namespace racon {
 
 auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
-                           std::span<Window> windows, const Overlap& ovlp) {
+                           std::span<Window> windows, const Overlap& ovlp,
+                           double quality_threshold) {
   const auto cigar = ovlp.cigar();
   const auto q_id = ovlp.q_id();
 
@@ -44,6 +45,11 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
 
   auto add_interval = [&]() {
     const auto len = q_last - q_first;
+    if (const auto win_len =
+            windows[window_idx].last() - windows[window_idx].first();
+        len < win_len * 0.02) {
+      return;
+    }
 
     const auto data = !ovlp.strand()
                           ? sequences[q_id]->data().substr(q_first, len)
@@ -54,12 +60,24 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
       if (sequences[q_id]->reverse_quality().empty()) {
         return std::string_view{};
       }
+
       return !ovlp.strand() ? sequences[q_id]->quality().substr(q_first, len)
                             : sequences[q_id]->reverse_quality().substr(
                                   q_len - q_last + 1, len);
     }();
 
-    windows[window_idx].AddLayer(data, quality, t_first, t_last);
+    if (!quality.empty()) {
+      double quality_sum = 0;
+      for (auto it : quality) {
+        quality_sum += it - 33;
+      }
+
+      if (quality_sum / quality.length() < quality_threshold) {
+        return;
+      }
+    }
+
+    windows[window_idx].AddLayer(data, quality, t_first, t_last - 1);
   };
 
   for (uint32_t i = 0, j = 0; window_idx < windows.size() && i < cigar.size();
@@ -76,9 +94,9 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
           q_first = q_curr;
           t_first = t_curr;
         }
-        q_last = q_curr;
-        t_last = t_curr;
-        if (t_last == static_cast<int32_t>(windows[window_idx].last()) - 1) {
+        q_last = q_curr + 1;
+        t_last = t_curr + 1;
+        if (t_curr == static_cast<int32_t>(windows[window_idx].last()) - 1) {
           if (found_first_match) {
             add_interval();
           }
@@ -183,7 +201,8 @@ struct Polisher::Impl {
           }
 
           for (const auto& ovlp_ptr : target_overlaps) {
-            BindOverlapsToWindows(data.sequences(), windows, *ovlp_ptr);
+            BindOverlapsToWindows(data.sequences(), windows, *ovlp_ptr,
+                                  config.quality_threshold);
           }
 
           std::atomic<size_t> n_polished_windows;
