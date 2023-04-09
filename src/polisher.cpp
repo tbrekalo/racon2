@@ -18,7 +18,7 @@
 
 namespace racon {
 
-auto BindSegmentsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
+auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
                            std::span<Window> windows, const Overlap& ovlp) {
   const auto cigar = ovlp.cigar();
   const auto q_id = ovlp.q_id();
@@ -184,7 +184,7 @@ struct Polisher::Impl {
           }
 
           for (const auto& ovlp_ptr : target_overlaps) {
-            BindSegmentsToWindows(data.sequences(), windows, *ovlp_ptr);
+            BindOverlapsToWindows(data.sequences(), windows, *ovlp_ptr);
           }
 
           std::atomic<size_t> n_polished_windows;
