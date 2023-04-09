@@ -21,11 +21,11 @@ struct Window::Impl {
     /* clang-format off */
     spoa::Graph graph{};
     if (qualities.front().empty()) {
-      graph.AddAlignment(spoa::Alignment(), 
+      graph.AddAlignment(spoa::Alignment(),
           sequences.front().data(), sequences.front().length());
     } else {
-      graph.AddAlignment(spoa::Alignment(), 
-          sequences.front().data(), sequences.front().length(), 
+      graph.AddAlignment(spoa::Alignment(),
+          sequences.front().data(), sequences.front().length(),
           qualities.front().data(), qualities.front().length());
     }
     /* clang-format on */
@@ -54,7 +54,7 @@ struct Window::Impl {
         auto subgraph =
             graph.Subgraph(positions[i].first, positions[i].second, &mapping);
         alignment = alignment_engine.Align(sequences[i].data(),
-                                           sequences[i].length() - 1, subgraph);
+                                           sequences[i].length(), subgraph);
         subgraph.UpdateAlignment(mapping, &alignment);
       }
 
@@ -137,7 +137,6 @@ Window::Window(uint32_t begin_pos, uint32_t end_pos, std::string_view backbone,
   pimpl_->sequences.push_back(backbone);
   pimpl_->qualities.push_back(quality);
   pimpl_->positions.emplace_back(0, 0);
-  pimpl_->positions.emplace_back(begin_pos, end_pos);
 }
 
 Window::~Window() {}
