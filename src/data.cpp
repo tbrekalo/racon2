@@ -93,8 +93,11 @@ Data LoadData(const std::string& sequences_path,
       break;
     }
 
-    sequences.insert(sequences.end(), std::make_move_iterator(reads.begin()),
-                     std::make_move_iterator(reads.end()));
+    /* clang-format off */
+    sequences.insert(sequences.end(),
+      std::make_move_iterator(reads.begin()),
+      std::make_move_iterator(reads.end()));
+    /* clang-format on */
 
     uint64_t n = 0;
     for (uint64_t i = l; i < sequences.size(); ++i, ++sequences_size) {
