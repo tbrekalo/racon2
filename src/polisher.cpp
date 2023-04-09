@@ -24,8 +24,6 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
   const auto cigar = ovlp.cigar();
   const auto q_id = ovlp.q_id();
 
-  const auto q_len = ovlp.q_length();
-
   bool found_first_match = false;
   int32_t q_curr =
       (!ovlp.strand() ? ovlp.q_begin() : (ovlp.q_length() - ovlp.q_end())) - 1;
@@ -35,7 +33,7 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
   auto t_first = t_curr;
 
   auto q_last = q_first, t_last = t_first;
-  auto window_idx = static_cast<std::size_t>(std::distance(
+  auto window_idx = static_cast<size_t>(std::distance(
       windows.begin(),
       std::upper_bound(windows.begin(), windows.end(),
                        static_cast<uint32_t>(t_curr + 1),
@@ -51,19 +49,19 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
       return;
     }
 
-    const auto data = !ovlp.strand()
-                          ? sequences[q_id]->data().substr(q_first, len)
-                          : sequences[q_id]->reverse_complement().substr(
-                                q_len - q_last + 1, len);
+    const auto data =
+        !ovlp.strand()
+            ? sequences[q_id]->data().substr(q_first, len)
+            : sequences[q_id]->reverse_complement().substr(q_first, len);
 
     const auto quality = [&] {
       if (sequences[q_id]->reverse_quality().empty()) {
         return std::string_view{};
       }
 
-      return !ovlp.strand() ? sequences[q_id]->quality().substr(q_first, len)
-                            : sequences[q_id]->reverse_quality().substr(
-                                  q_len - q_last + 1, len);
+      return !ovlp.strand()
+                 ? sequences[q_id]->quality().substr(q_first, len)
+                 : sequences[q_id]->reverse_quality().substr(q_first, len);
     }();
 
     if (!quality.empty()) {
@@ -190,11 +188,10 @@ struct Polisher::Impl {
             const auto nxt =
                 std::min(pos + config.window_length, target_data.length());
 
-            const auto data = target_data.substr(pos, config.window_length);
-            const auto qual =
-                target_qual.empty()
-                    ? std::string_view()
-                    : target_qual.substr(pos, config.window_length);
+            const auto data = target_data.substr(pos, nxt - pos);
+            const auto qual = target_qual.empty()
+                                  ? std::string_view()
+                                  : target_qual.substr(pos, nxt - pos);
 
             windows.emplace_back(pos, nxt, data, qual);
             pos = nxt;
