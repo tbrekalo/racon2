@@ -12,10 +12,10 @@ namespace racon {
 struct Window::Impl {
   std::pair<std::string, bool> GenerateConsensus(
       spoa::AlignmentEngine& alignment_engine, bool trim) {
-    std::string consensus =
-        std::string(sequences.front().begin(), sequences.front().end());
+    std::string consensus;
     if (sequences.size() < 3) {
-      return {consensus, false};
+      return {std::string(sequences.front().begin(), sequences.front().end()),
+              false};
     }
 
     /* clang-format off */
@@ -137,6 +137,7 @@ Window::Window(uint32_t begin_pos, uint32_t end_pos, std::string_view backbone,
   pimpl_->sequences.push_back(backbone);
   pimpl_->qualities.push_back(quality);
   pimpl_->positions.emplace_back(0, 0);
+  pimpl_->positions.emplace_back(begin_pos, end_pos);
 }
 
 Window::~Window() {}
