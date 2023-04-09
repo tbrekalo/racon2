@@ -183,7 +183,7 @@ Data LoadData(const std::string& sequences_path,
 
     uint64_t l = c;
     for (uint64_t i = l; i < all_overlaps.size(); ++i) {
-      all_overlaps[i]->Transmute(sequences, name_to_id, id_to_id);
+      all_overlaps[i]->transmute(sequences, name_to_id, id_to_id);
 
       if (!all_overlaps[i]->IsValid()) {
         all_overlaps[i].reset();
