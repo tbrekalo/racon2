@@ -191,7 +191,7 @@ struct Polisher::Impl {
           tbb::parallel_for(
               size_t(0), windows.size(), [&](size_t window_idx) -> void {
                 auto consensus_flag = windows[window_idx].GenerateConsensus(
-                    GetAlignmentEngine(config.poa_cfg), config.trim);
+                    GetAlignmentEngine(config), config.trim);
                 n_polished_windows += consensus_flag.second;
                 window_consensues[window_idx] = std::move(consensus_flag.first);
               });
@@ -226,11 +226,13 @@ struct Polisher::Impl {
     return dst;
   }
 
-  spoa::AlignmentEngine& GetAlignmentEngine(POAConfig const config) {
+  spoa::AlignmentEngine& GetAlignmentEngine(const PolisherConfig& config) {
     auto& engine = alignment_engines.local();
     if (!engine) {
       engine = spoa::AlignmentEngine::Create(
-          spoa::AlignmentType::kNW, config.match, config.mismatch, config.gap);
+          spoa::AlignmentType::kNW, config.poa_cfg.match,
+          config.poa_cfg.mismatch, config.poa_cfg.gap);
+      engine->Prealloc(config.window_length * 1.2, 5);
     }
 
     return *engine;
