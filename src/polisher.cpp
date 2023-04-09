@@ -27,8 +27,8 @@ auto BindOverlapsToWindows(std::span<const std::unique_ptr<Sequence>> sequences,
 
   bool found_first_match = false;
   int32_t q_curr =
-      (ovlp.strand() ? (ovlp.q_length() - ovlp.q_end()) : ovlp.q_begin()) - 1;
-  auto q_first = q_curr + 1;
+      (!ovlp.strand() ? ovlp.q_begin() : (ovlp.q_length() - ovlp.q_end())) - 1;
+  auto q_first = q_curr;
 
   int32_t t_curr = ovlp.t_begin() - 1;
   auto t_first = t_curr;
