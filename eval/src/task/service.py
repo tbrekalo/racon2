@@ -33,7 +33,7 @@ def format_minimap_args(
         reads_path: FilePath,
         threads: int) -> List[str]:
     return [
-        'minimap2',
+        'minimap2', '--eqx',
         '-ax', 'map-ont',
         str(ref_path), str(reads_path),
         '-t', str(threads)
