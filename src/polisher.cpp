@@ -279,7 +279,8 @@ std::vector<Overlap> Polisher::MapSequences(
 
     timer.Start();
 
-    minimizer_engine.Minimize(targets.begin() + j, targets.begin() + i + 1);
+    minimizer_engine.Minimize(
+        std::span(targets.begin() + j, targets.begin() + i + 1));
     minimizer_engine.Filter(0.001);
 
     std::cerr << "[racon::Polisher::Polish]"

@@ -5,9 +5,8 @@ project(racon VERSION 3.0.4
               DESCRIPTION "Racon is a c++ consensus module for raw de novo DNA assembly of long uncorrected reads.")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pedantic")
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
@@ -46,25 +45,18 @@ if (NOT edlib_FOUND)
   endif ()
 endif ()
 
-find_package(ram 2.2.0 QUIET)
-if (NOT ram_FOUND)
-  if (racon_install)
-    message(FATAL_ERROR "Missing package ram!")
-  endif ()
+FetchContent_Declare(
+  ram
+  GIT_REPOSITORY https://github.com/tbrekalo/tb-ram
+  GIT_TAG 0.1.1)
 
-  FetchContent_Declare(
-    ram
-    GIT_REPOSITORY https://github.com/lbcb-sci/ram
-    GIT_TAG 2.2.0)
-
-  FetchContent_GetProperties(ram)
-  if (NOT ram_POPULATED)
-    FetchContent_Populate(ram)
-    add_subdirectory(
-      ${ram_SOURCE_DIR}
-      ${ram_BINARY_DIR}
-      EXCLUDE_FROM_ALL)
-  endif ()
+FetchContent_GetProperties(ram)
+if (NOT ram_POPULATED)
+  FetchContent_Populate(ram)
+  add_subdirectory(
+    ${ram_SOURCE_DIR}
+    ${ram_BINARY_DIR}
+    EXCLUDE_FROM_ALL)
 endif ()
 
 find_package(spoa 4.0.8 QUIET)
