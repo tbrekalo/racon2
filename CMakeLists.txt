@@ -48,7 +48,7 @@ endif ()
 FetchContent_Declare(
   ram
   GIT_REPOSITORY https://github.com/tbrekalo/tb-ram
-  GIT_TAG 0.1.1)
+  GIT_TAG 0.2)
 
 FetchContent_GetProperties(ram)
 if (NOT ram_POPULATED)
